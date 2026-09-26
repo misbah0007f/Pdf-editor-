@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PDF Editor</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,"Noto Sans Bengali",Arial,sans-serif;background:#eef1f6;color:#172033}
+header{background:#fff;border-bottom:1px solid #dce1ea;padding:14px 18px;display:flex;gap:14px;align-items:center;position:sticky;top:0;z-index:10}
+h1{font-size:20px;margin:0}.spacer{flex:1}.btn{border:0;border-radius:8px;padding:10px 14px;background:#2563eb;color:#fff;cursor:pointer;font-weight:600}.btn.secondary{background:#e8edf5;color:#172033}.btn.danger{background:#dc2626}.btn:disabled{opacity:.5;cursor:not-allowed}
+main{display:grid;grid-template-columns:250px 1fr 280px;min-height:calc(100vh - 65px)}
+aside{background:#fff;padding:14px;border-right:1px solid #dce1ea}.right{border-left:1px solid #dce1ea}
+.tool{width:100%;margin-bottom:8px;text-align:left}.hint{font-size:12px;color:#667085;line-height:1.5}
+#workspace{padding:22px;overflow:auto}.empty{max-width:600px;margin:80px auto;text-align:center;background:#fff;border:2px dashed #cbd5e1;padding:45px;border-radius:14px}
+#pages{display:flex;flex-direction:column;align-items:center;gap:20px}.pageWrap{position:relative;box-shadow:0 4px 18px #0002;background:#fff}.pageWrap canvas{display:block}.layer{position:absolute;inset:0;overflow:hidden}.obj{position:absolute;min-width:20px;min-height:20px;cursor:move;user-select:none;border:1px dashed transparent}.obj.selected{border:1px dashed #2563eb}.obj img{display:block;width:100%;height:100%;object-fit:contain}.textObj{padding:2px;white-space:pre-wrap;outline:none}.sigObj{background:transparent}.sigObj img{width:100%;height:100%;object-fit:contain}
+.panel{padding:14px}.panel h3{margin:4px 0 14px;font-size:15px}.field{margin-bottom:10px}.field label{display:block;font-size:12px;color:#667085;margin-bottom:5px}.field input,.field select{width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:7px}
+.modal{position:fixed;inset:0;background:#0007;display:none;align-items:center;justify-content:center;z-index:50}.modal.show{display:flex}.modalbox{background:#fff;width:min(520px,94vw);padding:18px;border-radius:12px}.sigcanvas{width:100%;height:180px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;touch-action:none}
+@media(max-width:900px){main{grid-template-columns:1fr}.right,aside{border:0;border-bottom:1px solid #dce1ea}.right{display:none}header{flex-wrap:wrap}#workspace{padding:10px}}
+</style>
+</head>
+<body>
+<header>
+<h1>📄 PDF Editor</h1><div class="spacer"></div>
+<input id="pdfInput" type="file" accept="application/pdf" hidden>
+<input id="imgInput" type="file" accept="image/*" hidden>
+<button class="btn" onclick="pdfInput.click()">PDF খুলুন</button>
+<button class="btn secondary" onclick="imgInput.click()" id="imgBtn" disabled>ছবি যোগ</button>
+<button class="btn secondary" onclick="openSignature()" id="sigBtn" disabled>✍️ Signature</button>
+<button class="btn" onclick="downloadPDF()" id="downloadBtn" disabled>Download PDF</button>
+</header>
+<main>
+<aside>
+<button class="btn secondary tool" onclick="addText()" id="textBtn" disabled>➕ Text যোগ</button>
+<button class="btn secondary tool" onclick="deleteSelected()" id="delBtn" disabled>🗑️ নির্বাচিত মুছুন</button>
+<button class="btn secondary tool" onclick="clearSelection()">নির্বাচন বাতিল</button>
+<p class="hint">PDF খুলে Text যোগ, ছবি বসানো বা Signature যোগ করুন। যোগ করা উপাদান মাউস/টাচ দিয়ে সরানো ও resize করা যায়।</p>
+</aside>
+<section id="workspace">
+<div class="empty" id="empty"><h2>আপনার PDF এখানে খুলুন</h2><p>PDF আপলোড করলে প্রতিটি পেজ দেখা যাবে। তারপর লেখা/ছবি/Signature যোগ করতে পারবেন।</p></div>
+<div id="pages"></div>
+</section>
+<aside class="right"><div class="panel">
+<h3>নির্বাচিত Text-এর সেটিং</h3>
+<div class="field"><label>Font</label><select id="font"><option>Arial</option><option>Times New Roman</option><option>Georgia</option><option>Courier New</option><option>Noto Sans Bengali</option><option>SolaimanLipi</option></select></div>
+<div class="field"><label>Size (px)</label><input id="size" type="number" value="18" min="6" max="120"></div>
+<div class="field"><label>Color</label><input id="color" type="color" value="#111111"></div>
+<button class="btn secondary" onclick="applyTextStyle()">Apply</button>
+<hr>
+<p class="hint">নোট: মূল PDF-এর existing text সরাসরি edit করার জন্য PDF-এর ভিতরে embedded font তথ্য প্রয়োজন। এই demo-তে নতুন/যোগ করা text-এর font ও style নিয়ন্ত্রণ করা যায়।</p>
+</div></aside>
+</main>
+
+<div class="modal" id="sigModal"><div class="modalbox">
+<h3>Signature তৈরি করুন</h3><canvas class="sigcanvas" id="sigCanvas"></canvas>
+<div style="display:flex;gap:8px;margin-top:12px"><button class="btn secondary" onclick="clearSig()">Clear</button><button class="btn" onclick="useSig()">PDF-এ যোগ করুন</button><button class="btn secondary" onclick="closeSignature()">Cancel</button></div>
+</div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs" type="module"></script>
+<script>
+let pdfjs, pdfDoc=null, pages=[], selected=null, drag=null;
+const $=id=>document.getElementById(id);
+(async()=>{pdfjs=await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs");pdfjs.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs";})();
+
+$("pdfInput").onchange=async e=>{
+ const f=e.target.files[0]; if(!f)return;
+ pdfDoc=await pdfjs.getDocument({data:await f.arrayBuffer()}).promise; pages=[];$("pages").innerHTML="";$("empty").style.display="none";
+ for(let i=1;i<=pdfDoc.numPages;i++) await renderPage(i);
+ ["imgBtn","sigBtn","textBtn","downloadBtn"].forEach(id=>$(id).disabled=false);
+};
+async function renderPage(n){
+ const p=await pdfDoc.getPage(n), scale=Math.min(1.6,Math.max(.8,window.innerWidth<700?0.8:1.15)), vp=p.getViewport({scale});
+ const wrap=document.createElement("div");wrap.className="pageWrap";wrap.style.width=vp.width+"px";wrap.style.height=vp.height+"px";
+ const c=document.createElement("canvas");c.width=vp.width;c.height=vp.height;await p.render({canvasContext:c.getContext("2d"),viewport:vp}).promise;
+ const layer=document.createElement("div");layer.className="layer";wrap.append(c,layer);$("pages").append(wrap);pages.push({wrap,layer,vp});
+}
+function currentPage(){return pages[0]}
+function makeObj(el,pageIndex=pages.length-1){
+ const pg=pages[pageIndex];el.classList.add("obj");el.style.left="30px";el.style.top="30px";pg.layer.appendChild(el);select(el);enableDrag(el);
+}
+function enableDrag(el){
+ el.addEventListener("pointerdown",e=>{if(e.target===el||el.contains(e.target)){select(el);drag={el,sx:e.clientX,sy:e.clientY,l:parseFloat(el.style.left)||0,t:parseFloat(el.style.top)||0};el.setPointerCapture(e.pointerId)}});
+ el.addEventListener("pointermove",e=>{if(!drag||drag.el!==el)return;el.style.left=(drag.l+e.clientX-drag.sx)+"px";el.style.top=(drag.t+e.clientY-drag.sy)+"px"});
+ el.addEventListener("pointerup",()=>drag=null);
+}
+function select(el){if(selected)selected.classList.remove("selected");selected=el;if(el){el.classList.add("selected");$("delBtn").disabled=false}else $("delBtn").disabled=true}
+function clearSelection(){select(null)}
+function addText(){
+ if(!pages.length)return;let d=document.createElement("div");d.className="textObj";d.contentEditable="true";d.textContent="এখানে লেখা লিখুন";d.style.fontFamily=$("font").value;d.style.fontSize=$("size").value+"px";d.style.color=$("color").value;d.style.background="transparent";d.style.width="220px";d.style.minHeight="32px";makeObj(d,0);d.focus();
+}
+$("imgInput").onchange=e=>{let f=e.target.files[0];if(!f||!pages.length)return;let r=new FileReader();r.onload=()=>{let d=document.createElement("div");d.style.width="180px";d.style.height="120px";let im=document.createElement("img");im.src=r.result;d.appendChild(im);makeObj(d,0)};r.readAsDataURL(f);e.target.value=""};
+function deleteSelected(){if(selected){selected.remove();selected=null;$("delBtn").disabled=true}}
+function applyTextStyle(){if(!selected||!selected.isContentEditable)return;selected.style.fontFamily=$("font").value;selected.style.fontSize=$("size").value+"px";selected.style.color=$("color").value}
+function openSignature(){ $("sigModal").classList.add("show");initSig() }function closeSignature(){$("sigModal").classList.remove("show")}
+let sc,ctx,drawing=false;
+function initSig(){sc=$("sigCanvas");sc.width=sc.clientWidth*2;sc.height=sc.clientHeight*2;ctx=sc.getContext("2d");ctx.scale(2,2);ctx.lineWidth=2.2;ctx.lineCap="round";ctx.strokeStyle="#111";sc.onpointerdown=e=>{drawing=true;ctx.beginPath();ctx.moveTo(e.offsetX,e.offsetY)};sc.onpointermove=e=>{if(drawing){ctx.lineTo(e.offsetX,e.offsetY);ctx.stroke()}};sc.onpointerup=()=>drawing=false;sc.onpointerleave=()=>drawing=false}
+function clearSig(){ctx.clearRect(0,0,sc.width,sc.height)}
+function useSig(){let d=document.createElement("div");d.className="sigObj";d.style.width="180px";d.style.height="80px";let im=document.createElement("img");im.src=sc.toDataURL("image/png");d.appendChild(im);makeObj(d,0);closeSignature()}
+async function downloadPDF(){
+ if(!pages.length)return;
+ alert("এই browser-only demo-তে PDF export-এর জন্য jsPDF যোগ করতে হবে। চাইলে আমি পরের ভার্সনে সম্পূর্ণ editable/exportable PDF বানিয়ে দিতে পারি।");
+}
+</script>
+</body></html>
